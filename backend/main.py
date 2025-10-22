@@ -1,10 +1,21 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
 from typing import List, Dict, Any
+from fastapi import HTTPException
 from utils.loader import load_recipes_from_file
+from utils.loader import get_recipe_by_id
 import random
 
-app = FastAPI(title="CulinAIry Agentic API")
+app = FastAPI(
+    title="CulinAIry Agentic API",
+    description="""
+🍳 **CulinAIry Agentic API**
+
+Plan optimized meals, explore AI-curated recipes, and integrate LLM-powered meal planning.  
+Built for the **AWS + NVIDIA Agentic AI Hackathon**.
+""",
+    version="1.0.0",
+)
 
 # Load all recipes from single JSON file
 RECIPES = load_recipes_from_file("recipes_updated.json")
@@ -14,11 +25,33 @@ class MealRequest(BaseModel):
     days: int
     preferences: List[str] = []  # e.g., ["low carb", "chicken", "italian"]
 
+@app.get("/", tags=["Root"])
+def home():
+    return {"message": "Welcome to the CulinAIry Agentic API!"}
+
 class MealPlan(BaseModel):
     day: int
     meals: List[Dict[str, Any]]
 
-@app.post("/plan-meals")
+@app.post(
+    "/plan-meals",
+    tags=["Meal Planner"],
+    summary="Generate a meal plan",
+    description="""
+    🧠 Generate a meal plan using available recipes.  
+    Filters recipes by preferences (optional), then organizes them by day and meal.
+    
+    Example:
+    ```json
+    {
+      "meals_per_day": 2,
+      "days": 3,
+      "preferences": ["low carb", "mexican"]
+    }
+    ```
+    """,
+    response_model=Dict[str, Any]
+)
 def plan_meals(request: MealRequest):
     # Filter recipes by preferences if provided
     filtered_recipes = RECIPES
@@ -58,6 +91,25 @@ def plan_meals(request: MealRequest):
         },
         "plan": plan
     }
+
+@app.get("/recipes", tags=["Recipes"])
+def list_recipes(limit: int = 10):
+    """
+    List recipes. Optional query parameter 'limit' to control number of recipes returned.
+    Example: /recipes?limit=5
+    """
+    return RECIPES[:limit]
+
+@app.get("/recipe/{recipe_id}", tags=["Recipes"])
+def read_recipe(recipe_id: str):
+    """
+    Fetch a single recipe by ID.
+    Example: /recipe/cal-smart-tex-mex-beef-bowls
+    """
+    recipe = get_recipe_by_id(RECIPES, recipe_id)
+    if not recipe:
+        raise HTTPException(status_code=404, detail="Recipe not found")
+    return recipe
 
 
 if __name__ == "__main__":
