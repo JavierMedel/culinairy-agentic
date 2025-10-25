@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict, Any
 from fastapi import HTTPException
 from utils.loader import load_recipes_from_file, get_recipe_by_id, attach_recipe_images
+from utils.embeddings_helper import add_recipe_embedding, find_similar_recipes
 from utils.ai_agent import query_nim
 from dotenv import load_dotenv
 
@@ -68,13 +69,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Load all recipes from single JSON file
-RECIPES = load_recipes_from_file("recipes_updated.json")
 
 # ------------------------------------------------------
 # 📦 Data Load
 # ------------------------------------------------------
 RECIPES = load_recipes_from_file("recipes_updated.json")
+
+
+print("⚡ Generating embeddings for recipes... (this may take a few minutes)")
+for r in RECIPES:
+    add_recipe_embedding(r["id_legacy"], r["title"] + " " + r.get("description", ""))
+print("✅ Recipe embeddings ready!")
 
 
 class MealRequest(BaseModel):
@@ -263,6 +268,7 @@ def read_recipe(recipe_id: str):
     """
     # Step 1: Find the recipe
     recipe = get_recipe_by_id(RECIPES, recipe_id)
+    
     if not recipe:
         raise HTTPException(status_code=404, detail="Recipe not found")
 
@@ -270,6 +276,7 @@ def read_recipe(recipe_id: str):
     recipe_with_images = attach_recipe_images(recipe)
 
     # Step 3: get AI-recommended similar recipes
+    similar_recipes = []
     try:
         prompt = f"""
         You are an AI recipe recommender for CulinAIry.
@@ -287,23 +294,24 @@ def read_recipe(recipe_id: str):
             attach_recipe_images(r) for r in RECIPES if r.get("id_legacy") in similar_ids
         ]
     except Exception as e:
-        print("⚠️ AI recommendations failed, skipping. Error:", e)
-        similar_recipes = []
+        print("⚠️ AI recommendations failed, using embeddings. Error:", e)
+        # fallback to embedding similarity
+        similar_ids = find_similar_recipes(recipe_id, top_k=3)
+        similar_recipes = [attach_recipe_images(r) for r in RECIPES if r.get("id_legacy") in similar_ids]
 
     recipe_with_images["recommended_recipes"] = similar_recipes
-
     return recipe_with_images
 
 # -------------------
 # AI test endpoint
 # -------------------
-@app.get("/ai/test")
-def ai_test(prompt: str):
-    try:
-        response = query_nim(prompt)
-        return {"prompt": prompt, "response": response}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+@app.get("/ai/test", tags=["AI"])
+def ai_test():
+    from utils.ai_agent import query_nim
+    prompt = "Give me 5 dinner ideas that are low-carb and Mexican inspired."
+    response = query_nim(prompt)
+    return {"prompt": prompt, "response": response}
+
 
 # ------------------------------------------------------
 # 🚀 Run Server
@@ -311,4 +319,4 @@ def ai_test(prompt: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=5000)  # or any other port

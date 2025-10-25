@@ -2,38 +2,28 @@ import os
 import requests
 import json
 
-# Load NVIDIA NIM endpoint and API key from environment variables
-NIM_ENDPOINT = os.getenv("NIM_ENDPOINT", "https://your-nim-endpoint.aws.com/v1/completions")
-NIM_API_KEY = os.getenv("NIM_API_KEY", "replace-with-your-key")
+# Default endpoint for local NIM
+NIM_URL = os.getenv("NIM_URL", "http://localhost:8000/v1/chat/completions")
 
 def query_nim(prompt: str, temperature: float = 0.7) -> str:
     """
-    Send a reasoning prompt to the NVIDIA NIM Llama-3 model.
-    Returns the model's output as a string.
+    Sends a prompt to the locally running NVIDIA NIM (Llama-3.1 Nemotron Nano 8B).
     """
-
-    if not NIM_ENDPOINT or not NIM_API_KEY:
-        print("⚠️ NIM endpoint or API key not set in .env")
-        return "NIM not configured. Using fallback."
-
-    headers = {
-        "Authorization": f"Bearer {NIM_API_KEY}",
-        "Content-Type": "application/json",
-    }
-
     payload = {
-        "model": "llama-3-1-nemotron-nano-8B-v1",
-        "messages": [{"role": "user", "content": prompt}],
+        "model": "nvidia/llama-3.1-nemotron-nano-8b-v1",
+        "messages": [
+            {"role": "system", "content": "You are a helpful AI assistant for meal planning and recipe generation."},
+            {"role": "user", "content": prompt}
+        ],
         "temperature": temperature,
-        "max_tokens": 800,
+        "max_tokens": 300
     }
 
     try:
-        response = requests.post(NIM_ENDPOINT, headers=headers, data=json.dumps(payload))
+        response = requests.post(NIM_URL, json=payload)
         response.raise_for_status()
         data = response.json()
-        return data["choices"][0]["message"]["content"]
+        return data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
     except Exception as e:
-        print(f"❌ NIM query failed: {e}")
-        return "NIM model unavailable. Using fallback."
-
+        print(f"❌ Error querying NIM: {e}")
+        return "AI service unavailable"
