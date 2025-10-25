@@ -4,6 +4,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict, Any
 from fastapi import HTTPException
 from utils.loader import load_recipes_from_file, get_recipe_by_id, attach_recipe_images
+from utils.ai_agent import query_nim
+from dotenv import load_dotenv
+
+import json
+import os
+
+load_dotenv()
+NIM_KEY = os.getenv("NIM_KEY")
+
 import random
 
 tags_metadata = [
@@ -139,31 +148,74 @@ class MealPlan(BaseModel):
     },
 )
 
+@app.post("/plan-meals", tags=["Meal Planner"])
 def plan_meals(request: MealRequest):
-    # Filter recipes by preferences if provided
-    filtered_recipes = RECIPES
+    """
+    Generate a meal plan using available recipes.
+    Filters recipes by preferences (optional), then organizes them by day and meal.
+    Uses NVIDIA NIM AI for reasoning-based selection with fallback to random selection.
+    """
 
+    # -----------------------
+    # Step 1: Filter recipes based on preferences
+    # -----------------------
+    filtered_recipes = RECIPES
     if request.preferences:
-        preferences_lower = [p.lower() for p in request.preferences]
+        prefs = [p.lower() for p in request.preferences]
         filtered_recipes = [
             r for r in RECIPES
-            if any(pref in r["title"].lower() or pref in r.get("cousine", "").lower() for pref in preferences_lower)
+            if any(pref in r["title"].lower() or pref in r.get("cousine", "").lower() for pref in prefs)
         ]
 
     if not filtered_recipes:
-        raise HTTPException(status_code=404, detail="No recipes match your preferences.")
+        raise HTTPException(status_code=404, detail="No recipes match your preferences")
 
     total_needed = request.meals_per_day * request.days
-    if len(filtered_recipes) < total_needed:
-        print(f"⚠️ Not enough recipes to fill all slots — reusing some recipes.")
-    
-    # Randomly select recipes
-    selected_recipes = random.choices(filtered_recipes, k=total_needed)
 
-    # Attach all images to each recipe (dish, steps, ingredients)
+    # -----------------------
+    # Step 2: Build AI prompt for meal planning
+    # -----------------------
+    prompt = f"""
+    You are an AI meal planner for CulinAIry.
+    You have access to {len(filtered_recipes)} recipes.
+    Each recipe includes title, cuisine, and nutritional info.
+
+    User request:
+    - {request.meals_per_day} meals per day
+    - for {request.days} days
+    - preferences: {', '.join(request.preferences) if request.preferences else 'none'}
+
+    Select recipes that fit the user's preferences, ensuring variety and balance.
+    Return a JSON list of recipe IDs (id_legacy) only.
+    """
+
+    # -----------------------
+    # Step 3: Query NIM for reasoning-based selection
+    # -----------------------
+    try:
+        ai_response = query_nim(prompt)
+        selected_ids = json.loads(ai_response)
+    except json.JSONDecodeError:
+        print("⚠️ AI response invalid, falling back to random selection")
+        import random
+        selected_ids = [r["id_legacy"] for r in random.choices(filtered_recipes, k=total_needed)]
+
+    # -----------------------
+    # Step 4: Match recipes by ID
+    # -----------------------
+    selected_recipes = [r for r in filtered_recipes if r.get("id_legacy") in selected_ids]
+    if len(selected_recipes) < total_needed:
+        import random
+        selected_recipes += random.choices(filtered_recipes, k=total_needed - len(selected_recipes))
+
+    # -----------------------
+    # Step 5: Attach images
+    # -----------------------
     selected_recipes_with_images = [attach_recipe_images(r) for r in selected_recipes]
 
-    # Structure the plan by day
+    # -----------------------
+    # Step 6: Structure plan by day
+    # -----------------------
     plan = []
     for day in range(1, request.days + 1):
         start_idx = (day - 1) * request.meals_per_day
@@ -186,6 +238,9 @@ def plan_meals(request: MealRequest):
 # ------------------------------------------------------
 # 📖 Recipes Endpoints
 # ------------------------------------------------------
+# -------------------------------
+# List all recipes with optional limit
+# -------------------------------
 
 @app.get("/recipes", tags=["Recipes"])
 def list_recipes(limit: int = 10):
@@ -196,21 +251,59 @@ def list_recipes(limit: int = 10):
     """
     return [attach_recipe_images(r) for r in RECIPES[:limit]]
 
+# -------------------------------
+# Fetch a single recipe by ID
+# -------------------------------
 @app.get("/recipe/{recipe_id}", tags=["Recipes"])
 def read_recipe(recipe_id: str):
     """
     Fetch a single recipe by ID with images attached.
+    Uses NIM to recommend similar recipes intelligently.
     Example: /recipe/cal-smart-tex-mex-beef-bowls
     """
-    # Get the recipe
+    # Step 1: Find the recipe
     recipe = get_recipe_by_id(RECIPES, recipe_id)
     if not recipe:
         raise HTTPException(status_code=404, detail="Recipe not found")
-    
-    # Attach images (dish, steps, ingredients)
+
+    # Step 2: Attach all images
     recipe_with_images = attach_recipe_images(recipe)
-    
+
+    # Step 3: get AI-recommended similar recipes
+    try:
+        prompt = f"""
+        You are an AI recipe recommender for CulinAIry.
+        Given the following recipe:
+        - Title: {recipe['title']}
+        - Cuisine: {recipe.get('cousine', 'unknown')}
+        - Description: {recipe.get('description', 'no description')}
+        
+        Recommend 3 similar recipes from the available list based on ingredients, cuisine, or flavor profile.
+        Return only a JSON list of recipe IDs (id_legacy).
+        """
+        ai_response = query_nim(prompt)
+        similar_ids = json.loads(ai_response)
+        similar_recipes = [
+            attach_recipe_images(r) for r in RECIPES if r.get("id_legacy") in similar_ids
+        ]
+    except Exception as e:
+        print("⚠️ AI recommendations failed, skipping. Error:", e)
+        similar_recipes = []
+
+    recipe_with_images["recommended_recipes"] = similar_recipes
+
     return recipe_with_images
+
+# -------------------
+# AI test endpoint
+# -------------------
+@app.get("/ai/test")
+def ai_test(prompt: str):
+    try:
+        response = query_nim(prompt)
+        return {"prompt": prompt, "response": response}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 # ------------------------------------------------------
 # 🚀 Run Server

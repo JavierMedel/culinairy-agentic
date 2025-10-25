@@ -95,3 +95,4 @@ datasets/
 *.csv
 *.json
 *.parquet
+images/
