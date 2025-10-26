@@ -19,4 +19,4 @@ CulinAIry Agentic autonomously plans weekly meals, retrieves recipes, and genera
 AWS • NVIDIA NIM • EKS / SageMaker • FastAPI • React • FAISS • S3
 
 ## Start the Server
-uvicorn main:app --reload
+ uvicorn main:app --reload --port 8080

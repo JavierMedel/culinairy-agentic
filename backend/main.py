@@ -8,13 +8,13 @@ from utils.embeddings_helper import add_recipe_embedding, find_similar_recipes
 from utils.ai_agent import query_nim
 from dotenv import load_dotenv
 
+import random
 import json
 import os
 
 load_dotenv()
 NIM_KEY = os.getenv("NIM_KEY")
 
-import random
 
 tags_metadata = [
     {
@@ -79,7 +79,9 @@ RECIPES = load_recipes_from_file("recipes_updated.json")
 print("⚡ Generating embeddings for recipes... (this may take a few minutes)")
 for r in RECIPES:
     add_recipe_embedding(r["id_legacy"], r["title"] + " " + r.get("description", ""))
+
 print("✅ Recipe embeddings ready!")
+print(find_similar_recipes("Low-carb Italian chicken dinner"))
 
 
 class MealRequest(BaseModel):
@@ -177,6 +179,8 @@ def plan_meals(request: MealRequest):
 
     total_needed = request.meals_per_day * request.days
 
+    print(f"Filtered to {filtered_recipes} recipes based on preferences.")
+
     # -----------------------
     # Step 2: Build AI prompt for meal planning
     # -----------------------
@@ -189,10 +193,13 @@ def plan_meals(request: MealRequest):
     - {request.meals_per_day} meals per day
     - for {request.days} days
     - preferences: {', '.join(request.preferences) if request.preferences else 'none'}
+    - recipes {filtered_recipes}
 
     Select recipes that fit the user's preferences, ensuring variety and balance.
     Return a JSON list of recipe IDs (id_legacy) only.
     """
+
+    print("AI Meal Plan Prompt:", prompt)
 
     # -----------------------
     # Step 3: Query NIM for reasoning-based selection
@@ -204,6 +211,8 @@ def plan_meals(request: MealRequest):
         print("⚠️ AI response invalid, falling back to random selection")
         import random
         selected_ids = [r["id_legacy"] for r in random.choices(filtered_recipes, k=total_needed)]
+
+    print("Selected recipe IDs:", selected_ids)
 
     # -----------------------
     # Step 4: Match recipes by ID
@@ -301,6 +310,8 @@ def read_recipe(recipe_id: str):
 
     recipe_with_images["recommended_recipes"] = similar_recipes
     return recipe_with_images
+
+
 
 # -------------------
 # AI test endpoint

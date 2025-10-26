@@ -23,6 +23,7 @@ def get_embedding(text: str):
     except Exception as e:
         print("Error calling embeddings NIM:", e)
         return None
+    
 
 def add_recipe_embedding(recipe_id: str, text: str):
     """
@@ -31,8 +32,11 @@ def add_recipe_embedding(recipe_id: str, text: str):
     emb = get_embedding(text)
     if emb is not None:
         embedding_index[recipe_id] = emb
+        # print("Embedding index contents:", embedding_index)
         return True
+    
     return False
+
 
 def find_similar_recipes(query_text: str, top_k: int = 3):
     """
@@ -49,17 +53,3 @@ def find_similar_recipes(query_text: str, top_k: int = 3):
 
     similarities.sort(key=lambda x: x[1], reverse=True)
     return [rid for rid, _ in similarities[:top_k]]
-
-# -------------------------
-# Example usage
-# -------------------------
-if __name__ == "__main__":
-    # Add all recipes to index
-    from utils.loader import load_recipes_from_file
-    recipes = load_recipes_from_file("recipes_updated.json")
-
-    for r in recipes:
-        add_recipe_embedding(r["id_legacy"], r["title"] + " " + r.get("description", ""))
-
-    # Test query
-    print(find_similar_recipes("Low-carb Mexican chicken dinner"))

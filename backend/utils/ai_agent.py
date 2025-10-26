@@ -3,7 +3,7 @@ import requests
 import json
 
 # Default endpoint for local NIM
-NIM_URL = os.getenv("NIM_URL", "http://localhost:8000/v1/chat/completions")
+NIM_URL = os.getenv("NIM_URL", "http://localhost:8002/v1/chat/completions")
 
 def query_nim(prompt: str, temperature: float = 0.7) -> str:
     """
