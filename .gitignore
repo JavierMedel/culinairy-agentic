@@ -96,3 +96,9 @@ datasets/
 *.json
 *.parquet
 images/
+
+# ========================
+# Local Files
+# ========================
+
+docker-servers.txt
