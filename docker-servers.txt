@@ -13,12 +13,33 @@ docker run -it --rm `
   nvcr.io/nim/nvidia/llama-3.1-nemotron-nano-8b-v1:latest
 
 
+
+
+# Set environment variables
+$env:NGC_API_KEY = "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"
+$env:LOCAL_NIM_CACHE = "$HOME\.cache\nim"
+
+# Create the local cache directory if it doesn’t exist
+if (!(Test-Path -Path $env:LOCAL_NIM_CACHE)) {
+    New-Item -ItemType Directory -Path $env:LOCAL_NIM_CACHE | Out-Null
+}
+
+# Run the Docker container
+docker run -it --rm `
+    --gpus all `
+    --shm-size=16GB `
+    -e NGC_API_KEY `
+    -v "${env:LOCAL_NIM_CACHE}:/opt/nim/.cache" `
+    -p 8001:8000 `
+    nvcr.io/nim/nvidia/llama-3.2-nv-embedqa-1b-v2:latest
+
+
+BASH
+
 export NGC_API_KEY=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
 export LOCAL_NIM_CACHE=~/.cache/nim
 mkdir -p "$LOCAL_NIM_CACHE"
 
-
-BASH
 
 docker run -it --rm \
     --gpus all \

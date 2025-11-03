@@ -15,8 +15,36 @@ CulinAIry Agentic autonomously plans weekly meals, retrieves recipes, and genera
 
 ---
 
+# CulinAIry Agentic App
+
+## Architecture Overview
+
+```mermaid
+flowchart TD
+    subgraph Frontend
+        WebUI[Web Application<br>(React/Vite)]
+    end
+
+    subgraph Backend
+        FastAPI[FastAPI Orchestrator]
+        AI_Agent[AI Agent<br>(Reasoning + Orchestration)]
+        Embeddings[Retrieval Embedding NIM]
+        Reasoning[LLM Reasoning NIM<br>llama-3.1-nemotron-nano-8B-v1]
+        RecipeDB[Recipe Database]
+    end
+
+    WebUI -->|API Calls| FastAPI
+    FastAPI --> AI_Agent
+    AI_Agent --> Embeddings
+    AI_Agent --> Reasoning
+    AI_Agent --> RecipeDB
+    FastAPI -->|Serve Recipes + Recommendations| WebUI
+
+
+
 ## 🧩 Architecture
 AWS • NVIDIA NIM • EKS / SageMaker • FastAPI • React • FAISS • S3
 
 ## Start the Server
- uvicorn main:app --reload --port 8080
+cd backend
+uvicorn main:app --reload --port 8080

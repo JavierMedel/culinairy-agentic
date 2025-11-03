@@ -3,7 +3,10 @@ import requests
 import json
 
 # Default endpoint for local NIM
-NIM_URL = os.getenv("NIM_URL", "http://localhost:8002/v1/chat/completions")
+# NIM_URL = os.getenv("NIM_URL", "http://localhost:8002/v1/chat/completions")
+
+# Running AWS NIM endpoint (uncomment to use)
+NIM_URL = "http://ac848d2b77594435281c81d04a0230b6-51436228.us-east-1.elb.amazonaws.com:8000/v1/chat/completions"
 
 def query_nim(prompt: str, temperature: float = 0.7) -> str:
     """

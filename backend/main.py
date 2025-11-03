@@ -69,25 +69,27 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 # ------------------------------------------------------
 # 📦 Data Load
 # ------------------------------------------------------
 RECIPES = load_recipes_from_file("recipes_updated.json")
-
 
 print("⚡ Generating embeddings for recipes... (this may take a few minutes)")
 for r in RECIPES:
     add_recipe_embedding(r["id_legacy"], r["title"] + " " + r.get("description", ""))
 
 print("✅ Recipe embeddings ready!")
-print(find_similar_recipes("Low-carb Italian chicken dinner"))
-
+# print(find_similar_recipes("Low-carb Italian chicken dinner"))
 
 class MealRequest(BaseModel):
     meals_per_day: int = Field(..., gt=0, le=5, description="Number of meals per day")
     days: int = Field(..., gt=0, le=7, description="Number of days to plan meals for")
     preferences: List[str] = Field(default_factory=list, description="List of user preferences or dietary tags") # e.g., ["low carb", "chicken", "italian"]
+
+class RecipeSearchRequest(BaseModel):
+    query: str = Field(..., description="User search query for recipes")
+    top_k: int = Field(3, gt=0, le=10, description="Number of top recipes to return")
+
 
 @app.get("/", tags=["Root"])
 def home():
@@ -155,80 +157,221 @@ class MealPlan(BaseModel):
     },
 )
 
-@app.post("/plan-meals", tags=["Meal Planner"])
-def plan_meals(request: MealRequest):
+
+@app.post("/search-recipes", tags=["Recipes Agentic Search"])
+def search_recipes(request: RecipeSearchRequest):
     """
-    Generate a meal plan using available recipes.
-    Filters recipes by preferences (optional), then organizes them by day and meal.
-    Uses NVIDIA NIM AI for reasoning-based selection with fallback to random selection.
+    Search recipes using embeddings + LLM reasoning (RAG pattern).
+    Steps:
+      1. Convert user query to embedding.
+      2. Retrieve top similar recipes from vector DB.
+      3. Use these recipes as context for LLM.
+      4. Ask LLM to select best matching recipes.
+      5. Return a list of recipe IDs.
     """
+    # -----------------------
+    # Step 1: Build semantic query
+    # -----------------------
+    user_query = request.query.strip() if request.query else "balanced meals"
+    print(f"🔍 User query: {user_query}")
 
     # -----------------------
-    # Step 1: Filter recipes based on preferences
+    # Step 2: Retrieve top similar recipes from vector DB
     # -----------------------
-    filtered_recipes = RECIPES
-    if request.preferences:
-        prefs = [p.lower() for p in request.preferences]
-        filtered_recipes = [
-            r for r in RECIPES
-            if any(pref in r["title"].lower() or pref in r.get("cousine", "").lower() for pref in prefs)
-        ]
+    try:
+        similar_recipes = find_similar_recipes(user_query, top_k=request.top_k)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Vector search failed: {e}")
 
-    if not filtered_recipes:
-        raise HTTPException(status_code=404, detail="No recipes match your preferences")
+    if not similar_recipes:
+        raise HTTPException(status_code=404, detail="No recipes found for this query")
 
-    total_needed = request.meals_per_day * request.days
-
-    print(f"Filtered to {filtered_recipes} recipes based on preferences.")
+    print(f"✅ Retrieved {len(similar_recipes)} semantically similar recipes")
 
     # -----------------------
-    # Step 2: Build AI prompt for meal planning
+    # Step 3: Prepare detailed recipe context for LLM
+    # -----------------------
+    recipe_context = []
+    for r in similar_recipes:
+        full_recipe = get_recipe_by_id(RECIPES, r)
+        if full_recipe:
+            recipe_context.append({
+                "id": full_recipe.get("id_legacy") or full_recipe.get("id"),
+                "title": full_recipe.get("title"),
+                "description": full_recipe.get("description", ""),
+                "ingredients": [ing.get("name") for ing in full_recipe.get("ingredients", [])],
+                "utensils": full_recipe.get("utensils", []),
+                "tags": full_recipe.get("tags", []),
+            })
+
+    print(f"🧩 Prepared recipe context for {len(recipe_context)} recipes")
+
+    # -----------------------
+    # Step 4: Build LLM prompt
     # -----------------------
     prompt = f"""
-    You are an AI meal planner for CulinAIry.
-    You have access to {len(filtered_recipes)} recipes.
-    Each recipe includes title, cuisine, and nutritional info.
+    You are an AI recipe assistant for CulinAIry.
 
-    User request:
-    - {request.meals_per_day} meals per day
-    - for {request.days} days
-    - preferences: {', '.join(request.preferences) if request.preferences else 'none'}
-    - recipes {filtered_recipes}
+    The user wants recipes for the following query:
+    "{user_query}"
 
-    Select recipes that fit the user's preferences, ensuring variety and balance.
-    Return a JSON list of recipe IDs (id_legacy) only.
+    You have access to {len(recipe_context)} relevant recipes:
+    {json.dumps(recipe_context, indent=2)}
+
+    Select up to {request.top_k} recipes that best match the user's query.
+    Return ONLY a JSON list of recipe IDs ("id") in selection order.
     """
 
-    print("AI Meal Plan Prompt:", prompt)
+    print("🧠 Sending prompt to LLM...")
 
     # -----------------------
-    # Step 3: Query NIM for reasoning-based selection
+    # Step 5: Query LLM
     # -----------------------
     try:
         ai_response = query_nim(prompt)
         selected_ids = json.loads(ai_response)
-    except json.JSONDecodeError:
-        print("⚠️ AI response invalid, falling back to random selection")
+    except Exception as e:
+        print("⚠️ LLM response invalid, using fallback random selection.", e)
         import random
-        selected_ids = [r["id_legacy"] for r in random.choices(filtered_recipes, k=total_needed)]
+        selected_ids = [
+            get_recipe_by_id(RECIPES, r).get("id_legacy") or get_recipe_by_id(RECIPES, r).get("id")
+            for r in random.choices(similar_recipes, k=request.top_k)
+        ]
+
+    print(f"✅ Selected recipe IDs: {selected_ids}")
+
+    # -----------------------
+    # Step 6: Return recipe IDs only
+    # -----------------------
+    return {
+        "query": user_query,
+        "count": len(selected_ids),
+        "recipe_ids": selected_ids
+    }
+
+@app.post("/plan-meals", tags=["Meal Planner"])
+def plan_meals(request: MealRequest):
+    """
+    Generate a meal plan using embeddings + LLM reasoning (RAG pattern).
+    Steps:
+      1. Build semantic query from user preferences.
+      2. Retrieve top similar recipes from the vector DB.
+      3. Use these recipes as context for the LLM.
+      4. Prepare detailed recipe context.
+      5. Send structured prompt to NIM (LLM).
+      6. Parse LLM response (selected recipe IDs).
+      7. Match recipes by ID and prepare full recipe objects.
+      8. Attach images.
+      9. Structure plan by day.
+     10. Return final JSON response.
+    """
+
+    # -----------------------
+    # Step 1: Build semantic query
+    # -----------------------
+    user_query = ", ".join(request.preferences) if request.preferences else "balanced weekly meals"
+    print(f"🔍 User query: {user_query}")
+
+    # -----------------------
+    # Step 2: Retrieve top similar recipes from vector DB
+    # -----------------------
+    try:
+        similar_recipes = find_similar_recipes(user_query, top_k=5)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Vector search failed: {e}")
+
+    if not similar_recipes:
+        raise HTTPException(status_code=404, detail="No similar recipes found")
+
+    print(f"✅ Retrieved {len(similar_recipes)} semantically similar recipes: {similar_recipes}")
+
+    # -----------------------
+    # Step 4: Prepare detailed recipe context
+    # -----------------------
+    recipe_context = []
+    for r in similar_recipes:
+        # Reuse helper function to get full recipe info
+        full_recipe = get_recipe_by_id(RECIPES, r)
+        if full_recipe:
+            context_entry = {
+                "id": full_recipe.get("id_legacy") or full_recipe.get("id"),
+                "title": full_recipe.get("title"),
+                "description": full_recipe.get("description", ""),
+                "ingredients": [ing.get("name") for ing in full_recipe.get("ingredients", [])],
+                "utensils": full_recipe.get("utensils", []),
+                "tags": full_recipe.get("tags", []),
+            }
+            recipe_context.append(context_entry)
+
+    print(f"🧩 Assembled recipe context for {len(recipe_context)} recipes")
+
+    # -----------------------
+    # Step 5: Build AI prompt with detailed context
+    # -----------------------
+    prompt = f"""
+    You are an AI meal planner for CulinAIry.
+
+    The user wants:
+    - {request.meals_per_day} meals per day
+    - for {request.days} days
+    - preferences: {user_query}
+
+    You have access to {len(recipe_context)} semantically relevant recipes:
+    {json.dumps(recipe_context, indent=2)}
+
+    Select recipes that fit the user's preferences, ensuring variety, balance, and no repetition.
+    Return ONLY a JSON list of recipe IDs ("id") in selection order.
+    """
+
+    print("🧠 Sending prompt to NIM...")
+
+    # -----------------------
+    # Step 6: Query LLM (NIM)
+    # -----------------------
+    try:
+        ai_response = query_nim(prompt)
+        selected_ids = json.loads(ai_response)
+    except Exception as e:
+        print("⚠️ AI response invalid, using fallback random selection.", e)
+        import random
+        selected_ids = random.choices(similar_recipes, k=request.meals_per_day * request.days)
 
     print("Selected recipe IDs:", selected_ids)
 
     # -----------------------
-    # Step 4: Match recipes by ID
+    # ✅ Step 7 – Match recipes by ID (reuse Step 4 logic)
     # -----------------------
-    selected_recipes = [r for r in filtered_recipes if r.get("id_legacy") in selected_ids]
-    if len(selected_recipes) < total_needed:
+    selected_recipes = []
+    for recipe_id in selected_ids:
+        # Reuse get_recipe_by_id to locate recipes
+        recipe_data = get_recipe_by_id(RECIPES, recipe_id)
+        if recipe_data:
+            selected_recipes.append(recipe_data)
+        else:
+            print(f"⚠️ Warning: Recipe ID '{recipe_id}' not found in dataset.")
+
+    # 🩹 Fallback if LLM returned fewer recipes than needed
+    if len(selected_recipes) < request.meals_per_day * request.days:
         import random
-        selected_recipes += random.choices(filtered_recipes, k=total_needed - len(selected_recipes))
+        remaining_needed = request.meals_per_day * request.days - len(selected_recipes)
+        extra = random.choices(
+            [get_recipe_by_id(RECIPES, r) for r in similar_recipes if get_recipe_by_id(RECIPES, r)],
+            k=remaining_needed,
+        )
+        selected_recipes += extra
+
+    # ✅ Just show the meals (concise output)
+    print(f"🍽️ Selected meals for the plan:")
+    for r in selected_recipes:
+        print(f" - {r.get('title')}")
 
     # -----------------------
-    # Step 5: Attach images
+    # Step 8 – Attach images
     # -----------------------
     selected_recipes_with_images = [attach_recipe_images(r) for r in selected_recipes]
 
     # -----------------------
-    # Step 6: Structure plan by day
+    # Step 9 – Structure plan by day
     # -----------------------
     plan = []
     for day in range(1, request.days + 1):
@@ -236,26 +379,29 @@ def plan_meals(request: MealRequest):
         end_idx = start_idx + request.meals_per_day
         plan.append({
             "day": day,
-            "meals": selected_recipes_with_images[start_idx:end_idx]
+            "meals": selected_recipes_with_images[start_idx:end_idx],
         })
 
+    # -----------------------
+    # Step 10 – Return structured response
+    # -----------------------
     return {
         "summary": {
             "days": request.days,
             "meals_per_day": request.meals_per_day,
             "preferences": request.preferences,
-            "total_recipes": len(filtered_recipes)
+            "retrieved_recipes": len(recipe_context),
         },
-        "plan": plan
+        "plan": plan,
     }
 
 # ------------------------------------------------------
 # 📖 Recipes Endpoints
 # ------------------------------------------------------
+
 # -------------------------------
 # List all recipes with optional limit
 # -------------------------------
-
 @app.get("/recipes", tags=["Recipes"])
 def list_recipes(limit: int = 10):
     """
@@ -272,45 +418,20 @@ def list_recipes(limit: int = 10):
 def read_recipe(recipe_id: str):
     """
     Fetch a single recipe by ID with images attached.
-    Uses NIM to recommend similar recipes intelligently.
     Example: /recipe/cal-smart-tex-mex-beef-bowls
     """
-    # Step 1: Find the recipe
+
+    # Step 1: Find the recipe in the dataset
     recipe = get_recipe_by_id(RECIPES, recipe_id)
     
     if not recipe:
         raise HTTPException(status_code=404, detail="Recipe not found")
 
-    # Step 2: Attach all images
+    # Step 2: Attach recipe images (AI-generated or stored)
     recipe_with_images = attach_recipe_images(recipe)
 
-    # Step 3: get AI-recommended similar recipes
-    similar_recipes = []
-    try:
-        prompt = f"""
-        You are an AI recipe recommender for CulinAIry.
-        Given the following recipe:
-        - Title: {recipe['title']}
-        - Cuisine: {recipe.get('cousine', 'unknown')}
-        - Description: {recipe.get('description', 'no description')}
-        
-        Recommend 3 similar recipes from the available list based on ingredients, cuisine, or flavor profile.
-        Return only a JSON list of recipe IDs (id_legacy).
-        """
-        ai_response = query_nim(prompt)
-        similar_ids = json.loads(ai_response)
-        similar_recipes = [
-            attach_recipe_images(r) for r in RECIPES if r.get("id_legacy") in similar_ids
-        ]
-    except Exception as e:
-        print("⚠️ AI recommendations failed, using embeddings. Error:", e)
-        # fallback to embedding similarity
-        similar_ids = find_similar_recipes(recipe_id, top_k=3)
-        similar_recipes = [attach_recipe_images(r) for r in RECIPES if r.get("id_legacy") in similar_ids]
-
-    recipe_with_images["recommended_recipes"] = similar_recipes
+    # Step 3: Return only the recipe information
     return recipe_with_images
-
 
 
 # -------------------
@@ -322,7 +443,6 @@ def ai_test():
     prompt = "Give me 5 dinner ideas that are low-carb and Mexican inspired."
     response = query_nim(prompt)
     return {"prompt": prompt, "response": response}
-
 
 # ------------------------------------------------------
 # 🚀 Run Server
