@@ -1,0 +1,17 @@
+# create nim_custom_value.yaml manifest
+cat <<EOF > nim_custom_value_emb.yaml
+image:
+  repository: "nvcr.io/nim/nvidia/llama-3.2-nv-embedqa-1b-v2" # container location
+  tag: latest # NIM version you want to deploy
+model:
+  ngcAPISecret: ngc-api  # name of a secret in the cluster that includes a key named NGC_CLI_API_KEY and is an NVIDIA API key
+persistence:
+  enabled: true
+  storageClass: "ebs-sc"
+  accessMode: ReadWriteOnce
+  stsPersistentVolumeClaimRetentionPolicy:
+      whenDeleted: Retain
+      whenScaled: Retain
+imagePullSecrets:
+  - name: registry-secret # name of a secret used to pull nvcr.io images, see https://kubernetes.io/docs/tasks/    configure-pod-container/pull-image-private-registry/
+EOF

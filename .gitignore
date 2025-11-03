@@ -95,3 +95,10 @@ datasets/
 *.csv
 *.json
 *.parquet
+images/
+
+# ========================
+# Local Files
+# ========================
+
+docker-servers.txt
