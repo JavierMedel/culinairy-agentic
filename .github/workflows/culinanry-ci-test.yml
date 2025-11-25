@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  test and build:
+  test_and_build:
 
     runs-on: ubuntu-latest
     strategy:
