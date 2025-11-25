@@ -4,7 +4,7 @@ from typing import List, Dict, Any
 
 # Base path for images (relative to backend folder)
 IMAGE_BASE_PATH = "images"
-BASE_URL = "http://localhost:8000"  # used for FastAPI docs and frontend previews
+BASE_URL = "http://localhost:8080"  # used for FastAPI docs and frontend previews
 
 def load_recipes_from_file(file_path: str) -> List[Dict[str, Any]]:
     """Load all recipes from a single JSON file."""

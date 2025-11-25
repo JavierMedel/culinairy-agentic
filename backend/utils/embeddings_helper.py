@@ -1,7 +1,9 @@
 import requests
 import numpy as np
 
-EMBEDDING_NIM_URL = "http://localhost:8001/v1/embeddings"  # your embeddings NIM
+# EMBEDDING_NIM_URL = "http://localhost:8001/v1/embeddings"  # your embeddings NIM
+
+EMBEDDING_NIM_URL = "http://ac848d2b98723443712c81d04a0230b7-09345228.us-east-1.elb.amazonaws.com:8000/v1/embeddings"
 
 # In-memory storage for demo purposes
 embedding_index = {}
